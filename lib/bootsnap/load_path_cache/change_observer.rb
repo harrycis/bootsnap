@@ -7,24 +7,24 @@ module Bootsnap
         # (<<, push, unshift, concat), override that method to also notify the
         # observer of the change.
         def <<(entry)
-          @lpc_observer.push_paths(self, entry.to_s)
+          @lpc_observer.push_paths(self, entry.to_s) if @lpc_observer
           super
         end
 
         def push(*entries)
-          @lpc_observer.push_paths(self, *entries.map(&:to_s))
+          @lpc_observer.push_paths(self, *entries.map(&:to_s)) if @lpc_observer
           super
         end
         alias_method :append, :push
 
         def unshift(*entries)
-          @lpc_observer.unshift_paths(self, *entries.map(&:to_s))
+          @lpc_observer.unshift_paths(self, *entries.map(&:to_s)) if @lpc_observer
           super
         end
         alias_method :prepend, :unshift
 
         def concat(entries)
-          @lpc_observer.push_paths(self, *entries.map(&:to_s))
+          @lpc_observer.push_paths(self, *entries.map(&:to_s)) if @lpc_observer
           super
         end
 
@@ -32,7 +32,9 @@ module Bootsnap
         # order, preserving the effective load path
         def uniq!(*args)
           ret = super
-          @lpc_observer.reinitialize if block_given? || !args.empty?
+           if @lpc_observer
+             @lpc_observer.reinitialize if block_given? || !args.empty?
+           end
           ret
         end
 
@@ -49,7 +51,7 @@ module Bootsnap
         ).each do |method_name|
           define_method(method_name) do |*args, &block|
             ret = super(*args, &block)
-            @lpc_observer.reinitialize
+            @lpc_observer.reinitialize  if @lpc_observer
             ret
           end
         end
@@ -59,6 +61,10 @@ module Bootsnap
         return if arr.frozen? # can't register observer, but no need to.
         arr.instance_variable_set(:@lpc_observer, observer)
         arr.extend(ArrayMixin)
+      end
+
+      def self.unregister(arr)
+        arr.instance_variable_set(:@lpc_observer, nil)
       end
     end
   end
