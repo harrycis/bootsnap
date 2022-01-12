@@ -8,83 +8,70 @@ module Bootsnap
         err.define_singleton_method(:path) { path }
         err
       end
+
+      module Kernel
+        # Note that require registers to $LOADED_FEATURES while load does not.
+        def require(path)
+          return false if Bootsnap::LoadPathCache.loaded_features_index.key?(path)
+
+          if (resolved = Bootsnap::LoadPathCache.load_path_cache.find(path))
+            Bootsnap::LoadPathCache.loaded_features_index.register(path, resolved) do
+              return super(resolved || path)
+            end
+          end
+
+          raise(Bootsnap::LoadPathCache::CoreExt.make_load_error(path))
+        rescue LoadError => e
+          e.instance_variable_set(Bootsnap::LoadPathCache::ERROR_TAG_IVAR, true)
+          raise(e)
+        rescue Bootsnap::LoadPathCache::ReturnFalse
+          false
+        rescue Bootsnap::LoadPathCache::FallbackScan
+          Bootsnap::LoadPathCache.loaded_features_index.register(path, nil) do
+            super(path)
+          end
+        end
+
+        def require_relative(path)
+          location = caller_locations(1..1).first
+          realpath = Bootsnap::LoadPathCache.realpath_cache.call(
+            location.absolute_path || location.path, path
+          )
+          require(realpath)
+        end
+
+        def load(path, wrap = false)
+          if (resolved = Bootsnap::LoadPathCache.load_path_cache.find(path, try_extensions: false))
+            super(resolved, wrap)
+          else
+            super(path, wrap)
+          end
+        end
+      end
+
+      module Module
+        def autoload(const, path)
+          # NOTE: This may defeat LoadedFeaturesIndex, but it's not immediately
+          # obvious how to make it work. This feels like a pretty niche case, unclear
+          # if it will ever burn anyone.
+          #
+          # The challenge is that we don't control the point at which the entry gets
+          # added to $LOADED_FEATURES and won't be able to hook that modification
+          # since it's done in C-land.
+          super(const, Bootsnap::LoadPathCache.load_path_cache.find(path) || path)
+        rescue LoadError => e
+          e.instance_variable_set(Bootsnap::LoadPathCache::ERROR_TAG_IVAR, true)
+          raise(e)
+        rescue Bootsnap::LoadPathCache::ReturnFalse
+          false
+        rescue Bootsnap::LoadPathCache::FallbackScan
+          super(const, path)
+        end
+      end
     end
-  end
-end
 
-module Kernel
-  module_function # rubocop:disable Style/ModuleFunction
-
-  alias_method(:require_without_bootsnap, :require)
-
-  # Note that require registers to $LOADED_FEATURES while load does not.
-  def require_with_bootsnap_lfi(path, resolved = nil)
-    Bootsnap::LoadPathCache.loaded_features_index.register(path, resolved) do
-      require_without_bootsnap(resolved || path)
-    end
-  end
-
-  def require(path)
-    return false if Bootsnap::LoadPathCache.loaded_features_index.key?(path)
-
-    if (resolved = Bootsnap::LoadPathCache.load_path_cache.find(path))
-      return require_with_bootsnap_lfi(path, resolved)
-    end
-
-    raise(Bootsnap::LoadPathCache::CoreExt.make_load_error(path))
-  rescue LoadError => e
-    e.instance_variable_set(Bootsnap::LoadPathCache::ERROR_TAG_IVAR, true)
-    raise(e)
-  rescue Bootsnap::LoadPathCache::ReturnFalse
-    false
-  rescue Bootsnap::LoadPathCache::FallbackScan
-    fallback = true
-  ensure
-    if fallback
-      require_with_bootsnap_lfi(path)
-    end
-  end
-
-  alias_method(:require_relative_without_bootsnap, :require_relative)
-  def require_relative(path)
-    location = caller_locations(1..1).first
-    realpath = Bootsnap::LoadPathCache.realpath_cache.call(
-      location.absolute_path || location.path, path
-    )
-    require(realpath)
-  end
-
-  alias_method(:load_without_bootsnap, :load)
-  def load(path, wrap = false)
-    if (resolved = Bootsnap::LoadPathCache.load_path_cache.find(path, try_extensions: false))
-      load_without_bootsnap(resolved, wrap)
-    else
-      load_without_bootsnap(path, wrap)
-    end
-  end
-end
-
-class Module
-  alias_method(:autoload_without_bootsnap, :autoload)
-  def autoload(const, path)
-    # NOTE: This may defeat LoadedFeaturesIndex, but it's not immediately
-    # obvious how to make it work. This feels like a pretty niche case, unclear
-    # if it will ever burn anyone.
-    #
-    # The challenge is that we don't control the point at which the entry gets
-    # added to $LOADED_FEATURES and won't be able to hook that modification
-    # since it's done in C-land.
-    autoload_without_bootsnap(const, Bootsnap::LoadPathCache.load_path_cache.find(path) || path)
-  rescue LoadError => e
-    e.instance_variable_set(Bootsnap::LoadPathCache::ERROR_TAG_IVAR, true)
-    raise(e)
-  rescue Bootsnap::LoadPathCache::ReturnFalse
-    false
-  rescue Bootsnap::LoadPathCache::FallbackScan
-    fallback = true
-  ensure
-    if fallback
-      autoload_without_bootsnap(const, path)
-    end
+    ::Kernel.prepend(CoreExt::Kernel)
+    ::Kernel.singleton_class.prepend(CoreExt::Kernel)
+    ::Module.prepend(CoreExt::Module)
   end
 end
