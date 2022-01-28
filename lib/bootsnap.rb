@@ -133,5 +133,14 @@ module Bootsnap
         path.start_with?("/")
       end
     end
+
+    # This is a semi-accurate ruby implementation of the native `rb_get_path(VALUE)` function.
+    # The native version is very intricate and may behave differently on windows etc.
+    # But we only use it for non-MRI platform.
+    def rb_get_path(fname)
+      path_path = path.respond_to?(:to_path) ? path.to_path : path
+      String.try_convert(path_path) or raise(TypeError, "no implicit conversion of #{path_path.class} into String")
+    end
+    alias_method :rb_get_path, :rb_get_path # Allow the C extension to redefine it without warning.
   end
 end
